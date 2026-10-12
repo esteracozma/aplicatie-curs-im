@@ -1,8 +1,8 @@
 # Pe urmele marilor navigatori
 
-Resursă educațională deschisă (RED) pentru **Istorie, clasa a VI-a** – tema „Marile descoperiri geografice: Columb, Vasco da Gama, Magellan”.
+Resursă educațională deschisă (RED), sub formă de joc scurt, pentru **Istorie, clasa a VI-a** – tema „Marile descoperiri geografice: Columb, Vasco da Gama, Magellan”.
 
-Aplicația are patru mini-sarcini: harta rutelor, axa timpului, jurnalul de bord și „Sunt căpitanul”, plus un bilet de ieșire cu autoevaluare.
+Elevul alege un căpitan, navighează pe hartă, răspunde la o întrebare sau ia o decizie la fiecare oprire și, la final, așază în ordine paginile jurnalului de bord. Primește între 1 și 3 stele.
 Nu colectează date personale, nu folosește cookie-uri și funcționează în orice browser, inclusiv pe telefon.
 
 Realizată pentru cursul „Aplicarea teoriei inteligențelor multiple în procesul de predare-învățare-evaluare” (Asociația Profedu).

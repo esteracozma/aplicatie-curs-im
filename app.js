@@ -1,7 +1,9 @@
 (function () {
   "use strict";
   var NS = "http://www.w3.org/2000/svg";
-  var ROUTES = window.ROUTES, EVENTS = window.EVENTS, JOURNAL = window.JOURNAL, DILEMMAS = window.DILEMMAS;
+  var CAPS = window.CAPTAINS;
+  var svg = document.getElementById("map");
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, attrs, text) {
@@ -15,413 +17,372 @@
     if (attrs) Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
     return e;
   }
-  function announce(msg) { $("live").textContent = ""; setTimeout(function () { $("live").textContent = msg; }, 30); }
   function proj(p) { return [(p[0] + 180) / 360 * 1000, (90 - p[1]) * 500 / 180]; }
-  function r1(n) { return Math.round(n * 10) / 10; }
+  function r2(n) { return Math.round(n * 100) / 100; }
+  function ease(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
-  /* ---------- Stare ---------- */
-  var state = {
-    visited: {},          // "routeId:index" -> true
-    timeDone: false, timeBest: 0,
-    jDone: false, jBest: 0,
-    chosen: {},           // dilema -> opțiune
-    selRoute: "toate", selStop: null
-  };
+  var done = {};          // id căpitan -> număr de stele
+  var G = null;           // starea jocului curent
+  var view = { x: 0, y: 40, w: 1000, h: 380 };
+  var scalers = [];
+  var layers = {};
 
-  /* ---------- Navigare ---------- */
-  var TABS = [
-    { id: "p-map", label: "1. Harta" },
-    { id: "p-time", label: "2. Axa timpului" },
-    { id: "p-journal", label: "3. Jurnalul de bord" },
-    { id: "p-captain", label: "4. Sunt căpitanul" },
-    { id: "p-final", label: "Biletul de ieșire" }
-  ];
-  function totalStops() { return ROUTES.reduce(function (a, r) { return a + r.stops.length; }, 0); }
-  function visitedCount() { return Object.keys(state.visited).length; }
-  function mapDone() {
-    return ROUTES.every(function (r) {
-      return r.stops.some(function (s, i) { return state.visited[r.id + ":" + i]; });
-    });
+  /* ---------- Cameră și scalare ---------- */
+  function kNow() { var cw = svg.clientWidth || 600; return view.w / cw; }
+  function applyView() {
+    svg.setAttribute("viewBox", r2(view.x) + " " + r2(view.y) + " " + r2(view.w) + " " + r2(view.h));
+    var k = kNow();
+    scalers.forEach(function (f) { f(k); });
   }
-  function isDone(id) {
-    if (id === "p-map") return mapDone();
-    if (id === "p-time") return state.timeDone;
-    if (id === "p-journal") return state.jDone;
-    if (id === "p-captain") return Object.keys(state.chosen).length === DILEMMAS.length;
-    return false;
+  function scaled(f) { scalers.push(f); f(kNow()); }
+  function tween(dur, fn, end) {
+    if (reduce || dur <= 0) { fn(1); if (end) end(); return; }
+    var t0 = performance.now();
+    function frame(now) {
+      var t = Math.min(1, (now - t0) / dur);
+      fn(t);
+      if (t < 1) requestAnimationFrame(frame); else if (end) end();
+    }
+    requestAnimationFrame(frame);
   }
-  function renderTabs(active) {
-    var nav = $("tabs");
-    nav.innerHTML = "";
-    TABS.forEach(function (t) {
-      var b = el("button", { type: "button", "data-t": t.id }, t.label);
-      if (t.id === active) b.setAttribute("aria-current", "true");
-      if (isDone(t.id)) b.classList.add("done");
-      b.addEventListener("click", function () { show(t.id); });
-      nav.appendChild(b);
-    });
+  function boundsView(pts) {
+    var xs = [], ys = [];
+    pts.forEach(function (p) { var q = proj(p); xs.push(q[0]); ys.push(q[1]); });
+    var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    var y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+    var A = (svg.clientWidth || 600) / (svg.clientHeight || 300);
+    var w = Math.max((x1 - x0) * 1.5, 150), h = Math.max((y1 - y0) * 1.5, 80);
+    if (w / h < A) w = h * A; else h = w / A;
+    if (w > 1000) { w = 1000; h = w / A; }
+    var cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    return { x: cx - w / 2, y: cy - h / 2, w: w, h: h };
   }
-  var current = "p-map";
-  function show(id) {
-    current = id;
-    Array.prototype.forEach.call(document.querySelectorAll("section.panel"), function (s) {
-      s.classList.toggle("active", s.id === id);
-    });
-    if (id === "p-final") renderSummary();
-    renderTabs(id);
-    window.scrollTo(0, 0);
+  function camTo(target, dur, end) {
+    var a = { x: view.x, y: view.y, w: view.w, h: view.h };
+    tween(dur, function (t) {
+      var e = ease(t);
+      view.x = a.x + (target.x - a.x) * e; view.y = a.y + (target.y - a.y) * e;
+      view.w = a.w + (target.w - a.w) * e; view.h = a.h + (target.h - a.h) * e;
+      applyView();
+    }, end);
   }
-  function refreshTabs() { renderTabs(current); }
 
-  /* ---------- 1. Harta ---------- */
-  var svg = $("map");
-  var routeEls = {};   // id -> {g, paths[], stops[]}
-
+  /* ---------- Desen ---------- */
   function smooth(pts) {
     var P = pts.map(proj);
-    if (P.length < 3) return "M" + P.map(function (p) { return r1(p[0]) + "," + r1(p[1]); }).join("L");
-    var d = "M" + r1(P[0][0]) + "," + r1(P[0][1]);
+    function f(p) { return r2(p[0]) + "," + r2(p[1]); }
+    if (P.length < 3) return "M" + P.map(f).join("L");
+    var d = "M" + f(P[0]);
     for (var i = 1; i < P.length - 1; i++) {
-      var mx = (P[i][0] + P[i + 1][0]) / 2, my = (P[i][1] + P[i + 1][1]) / 2;
-      d += "Q" + r1(P[i][0]) + "," + r1(P[i][1]) + " " + r1(mx) + "," + r1(my);
+      var m = [(P[i][0] + P[i + 1][0]) / 2, (P[i][1] + P[i + 1][1]) / 2];
+      d += "Q" + f(P[i]) + " " + f(m);
     }
-    d += "L" + r1(P[P.length - 1][0]) + "," + r1(P[P.length - 1][1]);
-    return d;
+    return d + "L" + f(P[P.length - 1]);
   }
-
-  function buildMap() {
-    var land = sv("path", { d: window.LAND_PATH, "class": "land" });
-    svg.appendChild(land);
-    ROUTES.forEach(function (r) {
-      var g = sv("g", { "data-route": r.id });
-      var paths = r.legs.map(function (leg) {
-        var p = sv("path", { d: smooth(leg.pts), "class": "route" + (leg.dashed ? " dashed" : ""), stroke: r.color });
-        g.appendChild(p);
-        return p;
-      });
-      var stops = r.stops.map(function (s, i) {
-        var xy = proj(s.at);
-        var gs = sv("g", { "class": "stop", tabindex: "0", role: "button", "aria-label": s.name + ", " + s.date });
-        gs.appendChild(sv("circle", { "class": "hit", cx: r1(xy[0]), cy: r1(xy[1]), r: 14 }));
-        gs.appendChild(sv("circle", { "class": "dot", cx: r1(xy[0]), cy: r1(xy[1]), r: 7, fill: r.color }));
-        gs.appendChild(sv("circle", { "class": "inner", cx: r1(xy[0]), cy: r1(xy[1]), r: 2.6, fill: "none" }));
-        gs.addEventListener("click", function () { selectStop(r.id, i); });
-        gs.addEventListener("keydown", function (e) {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectStop(r.id, i); }
-        });
-        g.appendChild(gs);
-        return gs;
-      });
-      svg.appendChild(g);
-      routeEls[r.id] = { g: g, paths: paths, stops: stops };
+  function buildScene(cap) {
+    svg.innerHTML = "";
+    scalers = [];
+    svg.appendChild(sv("path", { d: window.LAND_PATH, "class": "land" }));
+    layers.lines = sv("g"); layers.marks = sv("g"); layers.ring = sv("g"); layers.ship = sv("g");
+    [layers.lines, layers.marks, layers.ring, layers.ship].forEach(function (g) { svg.appendChild(g); });
+    // navă
+    var ship = sv("g", { id: "ship" });
+    var c = sv("circle", { fill: "var(--card)", stroke: cap.color, style: "stroke-width:3px;vector-effect:non-scaling-stroke" });
+    var t = sv("text", { "text-anchor": "middle", "dominant-baseline": "central" });
+    t.textContent = "⛵";
+    ship.appendChild(c); ship.appendChild(t);
+    scaled(function (k) { c.setAttribute("r", 17 * k); t.setAttribute("font-size", 22 * k); });
+    layers.ship.appendChild(ship);
+    layers.shipEl = ship;
+  }
+  function setShip(ll) {
+    var q = proj(ll);
+    layers.shipEl.setAttribute("transform", "translate(" + r2(q[0]) + "," + r2(q[1]) + ")");
+  }
+  function addMark(cap, name, ll, strong) {
+    var q = proj(ll);
+    var g = sv("g", { "class": "mark", transform: "translate(" + r2(q[0]) + "," + r2(q[1]) + ")" });
+    var c = sv("circle", { fill: cap.color, stroke: "var(--card)", style: "stroke-width:2px;vector-effect:non-scaling-stroke" });
+    var t = sv("text", { "text-anchor": "middle" });
+    t.textContent = name;
+    g.appendChild(c); g.appendChild(t);
+    scaled(function (k) {
+      c.setAttribute("r", (strong ? 8 : 6) * k);
+      t.setAttribute("font-size", 13 * k); t.setAttribute("y", -24 * k); t.style.strokeWidth = (4 * k) + "px"; t.style.display = k > 1.6 ? "none" : "";
     });
-    // eticheta oprirei selectate
-    var lab = sv("text", { id: "stopLabel", "text-anchor": "middle", "class": "stop" });
-    lab.style.pointerEvents = "none";
-    svg.appendChild(lab);
+    layers.marks.appendChild(g);
   }
+  function showRing(cap, step, onTap) {
+    layers.ring.innerHTML = "";
+    var q = proj(step.at);
+    var g = sv("g", { id: "ring", transform: "translate(" + r2(q[0]) + "," + r2(q[1]) + ")", tabindex: "0", role: "button", "aria-label": "Navighează spre " + step.name });
+    var fill = sv("circle", { "class": "ringfill", fill: cap.color });
+    var line = sv("circle", { "class": "ringline", stroke: cap.color });
+    var hit = sv("circle", { fill: "transparent" });
+    var t = sv("text", { "text-anchor": "middle", style: "font-family:Georgia,serif;font-weight:700;fill:var(--ink);paint-order:stroke;stroke:var(--sea);stroke-linejoin:round" });
+    t.textContent = step.name;
+    [fill, line, hit, t].forEach(function (n) { g.appendChild(n); });
+    scaled(function (k) {
+      fill.setAttribute("r", 30 * k); line.setAttribute("r", 30 * k); hit.setAttribute("r", 52 * k);
+      t.setAttribute("font-size", 13 * k); t.setAttribute("y", -38 * k); t.style.strokeWidth = (4 * k) + "px";
+    });
+    g.addEventListener("click", onTap);
+    g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onTap(); } });
+    layers.ring.appendChild(g);
+  }
+  function clearRing() { layers.ring.innerHTML = ""; }
 
-  function buildRouteButtons() {
-    var box = $("routeBtns");
-    var all = [{ id: "toate", label: "Toate" }].concat(ROUTES.map(function (r) { return { id: r.id, label: r.short + " (" + r.years + ")" }; }));
-    box.innerHTML = "";
-    all.forEach(function (o) {
-      var b = el("button", { type: "button", "data-r": o.id, "aria-pressed": String(o.id === state.selRoute) }, o.label);
-      b.addEventListener("click", function () { selectRoute(o.id); });
+  /* ---------- Ecrane ---------- */
+  function showChoose() {
+    G = null;
+    $("choose").hidden = false; $("game").hidden = true;
+    $("back").hidden = true; $("pages").hidden = true;
+    $("title").textContent = "Pe urmele marilor navigatori";
+    var box = $("cards"); box.innerHTML = "";
+    CAPS.forEach(function (cap) {
+      var b = el("button", { type: "button", "class": "cap", style: "border-color:" + cap.color });
+      b.appendChild(el("div", { "class": "band", style: "background:" + cap.color }));
+      var body = el("div", { "class": "body" });
+      if (done[cap.id]) body.appendChild(el("span", { "class": "stars", "aria-label": done[cap.id] + " stele din 3" }, "★".repeat(done[cap.id]) + "☆".repeat(3 - done[cap.id])));
+      body.appendChild(el("h2", null, cap.name));
+      body.appendChild(el("p", { "class": "tag" }, cap.tag));
+      body.appendChild(el("p", { "class": "go" }, cap.goal));
+      body.appendChild(el("span", { "class": "cta" }, done[cap.id] ? "Joacă din nou" : "Pornește"));
+      b.appendChild(body);
+      b.addEventListener("click", function () { startGame(cap); });
       box.appendChild(b);
     });
-    var lg = $("legend");
-    lg.innerHTML = "";
-    ROUTES.forEach(function (r) { lg.appendChild(el("span", { "class": "l-" + r.id }, r.name)); });
-    var dashed = el("span", { style: "color:var(--muted);font-weight:400" }, "linia punctată = întoarcere");
-    lg.appendChild(dashed);
+    $("ticket").hidden = Object.keys(done).length === 0;
+    window.scrollTo(0, 0);
   }
 
-  function selectRoute(id) {
-    state.selRoute = id;
-    state.selStop = null;
-    Array.prototype.forEach.call($("routeBtns").children, function (b) {
-      b.setAttribute("aria-pressed", String(b.getAttribute("data-r") === id));
-    });
-    ROUTES.forEach(function (r) {
-      var on = id === "toate" || id === r.id;
-      routeEls[r.id].g.classList.toggle("dim", !on);
-      routeEls[r.id].stops.forEach(function (s) { s.setAttribute("tabindex", on ? "0" : "-1"); s.classList.remove("selected"); });
-    });
-    $("stopLabel").textContent = "";
-    renderChips();
-    animateRoutes();
-    $("info").innerHTML = "";
-    $("info").appendChild(el("p", { "class": "muted" }, id === "toate"
-      ? "Apasă pe o oprire ca să afli mai multe."
-      : (ROUTES.filter(function (r) { return r.id === id; })[0].summary)));
+  function startGame(cap) {
+    G = { cap: cap, i: 0, pos: cap.start.at, got: [], askTotal: 0, askFirst: 0, orderTries: 0, busy: false };
+    $("choose").hidden = true; $("game").hidden = false;
+    $("back").hidden = false; $("pages").hidden = false;
+    $("title").textContent = cap.name;
+    updatePages();
+    buildScene(cap);
+    addMark(cap, cap.start.name, cap.start.at, true);
+    setShip(cap.start.at);
+    view = { x: 0, y: 40, w: 1000, h: 380 };
+    applyView();
+    window.scrollTo(0, 0);
+    nav();
+  }
+  function updatePages() { $("pages").textContent = "📜 " + G.got.length + "/" + G.cap.steps.length; }
+
+  function legsFor(step) {
+    var prev = G.pos;
+    if (step.wrap) return [[prev].concat(step.wrap.before), step.wrap.after.concat([step.at])];
+    return [[prev].concat(step.via || [], [step.at])];
+  }
+  function allPts(legs) { return legs.reduce(function (a, l) { return a.concat(l); }, []); }
+  function fitFor(step) {
+    var legs = legsFor(step);
+    if (legs.length > 1) return { x: 0, y: 40, w: 1000, h: 380 };
+    var v = boundsView(allPts(legs));
+    return v;
   }
 
-  function renderChips() {
-    var box = $("stopChips");
-    box.innerHTML = "";
-    ROUTES.forEach(function (r) {
-      if (state.selRoute !== "toate" && state.selRoute !== r.id) return;
-      r.stops.forEach(function (s, i) {
-        var b = el("button", { type: "button" }, (state.selRoute === "toate" ? r.short + ": " : "") + s.name.split(" (")[0]);
-        if (state.visited[r.id + ":" + i]) b.classList.add("visited");
-        b.addEventListener("click", function () { selectStop(r.id, i); });
-        box.appendChild(b);
-      });
-    });
+  function prog(i) {
+    var p = el("div", { "class": "prog", "aria-hidden": "true" });
+    G.cap.steps.forEach(function (s, j) { p.appendChild(el("i", j < i ? { "class": "on" } : null)); });
+    return p;
   }
 
-  function selectStop(rid, i) {
-    var r = ROUTES.filter(function (x) { return x.id === rid; })[0];
-    var s = r.stops[i];
-    state.visited[rid + ":" + i] = true;
-    state.selStop = rid + ":" + i;
-    ROUTES.forEach(function (rr) {
-      routeEls[rr.id].stops.forEach(function (g, j) {
-        g.classList.toggle("visited", !!state.visited[rr.id + ":" + j]);
-        g.classList.toggle("selected", rr.id === rid && j === i);
-      });
-    });
-    var xy = proj(s.at);
-    var lab = $("stopLabel");
-    lab.textContent = s.name.split(" (")[0];
-    var x = Math.min(900, Math.max(100, xy[0]));
-    lab.setAttribute("x", r1(x));
-    lab.setAttribute("y", r1(xy[1] - 14));
-    var info = $("info");
-    info.innerHTML = "";
-    info.appendChild(el("h3", null, s.name));
-    info.appendChild(el("p", { "class": "muted" }, r.name + " · " + s.date));
-    info.appendChild(el("p", null, s.text));
-    info.appendChild(el("p", { "class": "fact" }, "Știai că? " + s.fact));
-    $("mapProgress").textContent = "Opriri explorate: " + visitedCount() + " din " + totalStops();
-    renderChips();
-    refreshTabs();
-    announce(s.name + ". " + s.date);
+  /* ---------- Navigare ---------- */
+  function nav() {
+    var cap = G.cap, step = cap.steps[G.i];
+    var sh = $("sheet"); sh.innerHTML = "";
+    sh.appendChild(prog(G.i));
+    if (G.i === 0) {
+      sh.appendChild(el("h2", null, cap.start.name));
+      sh.appendChild(el("p", { "class": "date" }, cap.start.date));
+      sh.appendChild(el("p", null, cap.start.text));
+    }
+    var p = el("p", { "class": "q" });
+    p.appendChild(document.createTextNode("Pune prora spre "));
+    p.appendChild(el("span", { style: "color:" + cap.color }, step.name));
+    p.appendChild(document.createTextNode(". Atinge zona marcată pe hartă."));
+    sh.appendChild(p);
+    var row = el("div", { "class": "row" });
+    var btn = el("button", { type: "button", "class": "primary" }, "⛵ Navighează");
+    row.appendChild(btn); sh.appendChild(row);
+    var go = function () { if (G.busy) return; G.busy = true; sail(step); };
+    btn.addEventListener("click", go);
+    camTo(fitFor(step), 700, function () { showRing(cap, step, go); });
   }
 
-  function animateRoutes() {
-    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    ROUTES.forEach(function (r) {
-      var paths = routeEls[r.id].paths;
-      var lens = paths.map(function (p) { return p.getTotalLength(); });
-      var total = lens.reduce(function (a, b) { return a + b; }, 0) || 1;
-      var delay = 0;
-      paths.forEach(function (p, k) {
-        var dashed = r.legs[k].dashed;
-        p.style.transition = "none";
-        if (reduce) { p.style.strokeDasharray = ""; p.style.strokeDashoffset = ""; return; }
-        if (dashed) {
-          // linia punctată apare treptat prin opacitate
-          p.style.opacity = "0";
-          void p.getBoundingClientRect();
-          p.style.transition = "opacity .6s ease " + delay + "s";
-          p.style.opacity = "1";
-          return;
+  function sail(step) {
+    var cap = G.cap;
+    clearRing();
+    $("sheet").innerHTML = "";
+    $("sheet").appendChild(el("p", { "class": "muted" }, "Navigăm…"));
+    var legs = legsFor(step);
+    var els = legs.map(function (pts, idx) {
+      var dashed = step.dashed && !step.wrap;
+      var p = sv("path", { d: smooth(pts), "class": "line" + (dashed ? " dashed" : ""), stroke: cap.color });
+      layers.lines.appendChild(p);
+      return { p: p, len: p.getTotalLength(), dashed: dashed };
+    });
+    var total = els.reduce(function (a, o) { return a + o.len; }, 0) || 1;
+    els.forEach(function (o) { if (!o.dashed) { o.p.style.strokeDasharray = o.len; o.p.style.strokeDashoffset = o.len; } else o.p.style.opacity = 0; });
+    var dur = Math.min(3600, Math.max(1800, total * 6));
+    tween(dur, function (t) {
+      var d = ease(t) * total, acc = 0;
+      for (var i = 0; i < els.length; i++) {
+        var o = els[i], local = Math.min(Math.max(d - acc, 0), o.len);
+        if (!o.dashed) o.p.style.strokeDashoffset = o.len - local; else o.p.style.opacity = local / o.len;
+        if (d <= acc + o.len || i === els.length - 1) {
+          var pt = o.p.getPointAtLength(local);
+          layers.shipEl.setAttribute("transform", "translate(" + r2(pt.x) + "," + r2(pt.y) + ")");
+          break;
         }
-        p.style.strokeDasharray = lens[k];
-        p.style.strokeDashoffset = lens[k];
-        void p.getBoundingClientRect();
-        var dur = Math.max(0.6, lens[k] / total * 4.5);
-        p.style.transition = "stroke-dashoffset " + dur + "s ease-in-out " + delay + "s";
-        p.style.strokeDashoffset = "0";
-        delay += dur;
-      });
-    });
-  }
-
-  /* ---------- 2. Axa timpului ---------- */
-  var tl = { order: [], years: false, items: [] };
-  function shuffled(arr) {
-    // amestec fix, determinist (același pentru toți elevii): 1522, 1488, 1519, 1492, 1521, 1498
-    return [5, 0, 3, 1, 4, 2].map(function (i) { return arr[i]; });
-  }
-  function initTime() {
-    tl.items = shuffled(EVENTS);
-    tl.order = [];
-    renderTime();
-    $("timeMsg").hidden = true;
-  }
-  function renderTime() {
-    var slots = $("slots"), pool = $("pool");
-    slots.innerHTML = ""; pool.innerHTML = "";
-    for (var i = 0; i < EVENTS.length; i++) {
-      var li = el("li", { "class": "slot" });
-      li.appendChild(el("span", { "class": "n" }, String(i + 1)));
-      var ev = tl.order[i];
-      if (ev) {
-        li.classList.add("filled");
-        var b = el("button", { type: "button", "aria-label": "Scoate evenimentul: " + ev.text }, ev.text + (tl.years ? " (" + ev.year + ")" : ""));
-        b.style.border = "none"; b.style.background = "transparent"; b.style.textAlign = "left"; b.style.flex = "1";
-        (function (e) { b.addEventListener("click", function () { removeEv(e); }); })(ev);
-        li.appendChild(b);
-        li.appendChild(el("span", { "class": "res", "data-res": i }));
-      } else {
-        li.appendChild(el("span", { "class": "muted" }, "Alege un eveniment de mai jos"));
+        acc += o.len;
       }
-      slots.appendChild(li);
-    }
-    tl.items.forEach(function (ev) {
-      if (tl.order.indexOf(ev) !== -1) return;
-      var b = el("button", { type: "button" });
-      if (tl.years) { var y = el("span", { "class": "y" }, ev.year + " · "); b.appendChild(y); }
-      b.appendChild(document.createTextNode(ev.text));
-      b.addEventListener("click", function () { addEv(ev); });
-      pool.appendChild(b);
+    }, function () {
+      G.pos = step.at;
+      G.busy = false;
+      setShip(step.at);
+      arrive(step);
     });
-  }
-  function addEv(ev) { if (tl.order.indexOf(ev) === -1) { tl.order.push(ev); $("timeMsg").hidden = true; renderTime(); } }
-  function removeEv(ev) { tl.order = tl.order.filter(function (e) { return e !== ev; }); $("timeMsg").hidden = true; renderTime(); }
-  function checkTime() {
-    var msg = $("timeMsg");
-    msg.hidden = false;
-    if (tl.order.length < EVENTS.length) {
-      msg.textContent = "Mai ai de așezat " + (EVENTS.length - tl.order.length) + " evenimente. Apasă pe ele ca să le adaugi pe axă.";
-      return;
-    }
-    var ok = 0;
-    tl.order.forEach(function (ev, i) {
-      var good = ev.year === EVENTS[i].year;
-      if (good) ok++;
-      var slot = $("slots").children[i];
-      slot.classList.remove("right", "wrong");
-      slot.classList.add(good ? "right" : "wrong");
-      slot.querySelector(".res").textContent = good ? "✓ corect" : "✗ reia";
-    });
-    state.timeBest = Math.max(state.timeBest, ok);
-    if (ok === EVENTS.length) {
-      state.timeDone = true;
-      msg.textContent = "Excelent! Toate evenimentele sunt în ordinea corectă: " + EVENTS.map(function (e) { return e.year; }).join(" → ") + ".";
-    } else {
-      msg.textContent = ok + " din " + EVENTS.length + " sunt la locul lor. Scoate evenimentele marcate cu ✗ și încearcă din nou. Te poate ajuta harta sau butonul „Arată anii”.";
-    }
-    refreshTabs();
-    announce(msg.textContent);
   }
 
-  /* ---------- 3. Jurnalul de bord ---------- */
-  var jSelects = [], jShown = false;
-  function buildJournal() {
-    var box = $("journal");
-    box.innerHTML = "";
-    jSelects = [];
-    JOURNAL.parts.forEach(function (p, idx) {
-      if (typeof p === "string") { box.appendChild(document.createTextNode(p)); return; }
-      var n = jSelects.length + 1;
-      var sel = el("select", { "aria-label": "Spațiul " + n });
-      sel.appendChild(el("option", { value: "" }, "— alege —"));
-      JOURNAL.bank.forEach(function (w) { sel.appendChild(el("option", { value: w }, w)); });
-      sel.dataset.answer = p.answer;
-      sel.addEventListener("change", function () { sel.classList.remove("right", "wrong"); var m = sel.nextSibling; if (m && m.className && m.className.indexOf("mark") === 0) m.textContent = ""; });
-      box.appendChild(sel);
-      box.appendChild(el("span", { "class": "mark" }));
-      jSelects.push(sel);
-    });
-  }
-  function checkJournal() {
-    var ok = 0, empty = 0;
-    jSelects.forEach(function (s) {
-      var mark = s.nextSibling;
-      s.classList.remove("right", "wrong");
-      if (!s.value) { empty++; mark.className = "mark"; mark.textContent = ""; return; }
-      var good = s.value === s.dataset.answer;
-      if (good) ok++;
-      s.classList.add(good ? "right" : "wrong");
-      mark.className = "mark " + (good ? "right" : "wrong");
-      mark.textContent = good ? " ✓" : " ✗";
-    });
-    var msg = $("jMsg");
-    msg.hidden = false;
-    if (jShown) {
-      msg.textContent = "Ai folosit răspunsurile afișate, așa că această verificare nu se punctează. Apasă „O iau de la capăt” ca să încerci singur.";
-      announce(msg.textContent);
-      return;
-    }
-    state.jBest = Math.max(state.jBest, ok);
-    if (empty) msg.textContent = "Mai ai " + empty + " spații necompletate. Alege un cuvânt în fiecare listă.";
-    else if (ok === jSelects.length) { state.jDone = true; msg.textContent = "Bravo! Jurnalul este complet și corect."; }
-    else msg.textContent = ok + " din " + jSelects.length + " spații sunt corecte. Schimbă răspunsurile marcate cu ✗ și verifică din nou.";
-    $("showJ").hidden = empty > 0 || ok === jSelects.length;
-    refreshTabs();
-    announce(msg.textContent);
-  }
-  function resetJournal() {
-    jShown = false;
-    buildJournal();
-    $("jMsg").hidden = true;
-    $("showJ").hidden = true;
-  }
-  function showJournal() {
-    jShown = true;
-    jSelects.forEach(function (s) { s.value = s.dataset.answer; s.classList.remove("wrong"); s.classList.add("right"); s.nextSibling.className = "mark right"; s.nextSibling.textContent = " ✓"; });
-    $("jMsg").hidden = false;
-    $("jMsg").textContent = "Acestea sunt răspunsurile corecte. Poți relua sarcina mai târziu, ca să verifici ce ai reținut.";
-  }
-
-  /* ---------- 4. Sunt căpitanul ---------- */
-  function buildDilemmas() {
-    var box = $("dilemmas");
-    box.innerHTML = "";
-    DILEMMAS.forEach(function (d, di) {
-      var c = el("div", { "class": "card" });
-      c.appendChild(el("h3", null, d.who));
-      c.appendChild(el("p", null, d.q));
-      var opts = el("div", { "class": "opts", role: "group", "aria-label": "Variante de răspuns" });
-      var note = el("div", { "class": "note", hidden: "", "aria-live": "polite" });
-      d.options.forEach(function (o, oi) {
-        var b = el("button", { type: "button" }, o.t);
-        b.addEventListener("click", function () {
-          state.chosen[di] = oi;
-          Array.prototype.forEach.call(opts.children, function (x, k) { x.classList.toggle("chosen", k === oi); });
-          note.hidden = false;
-          note.innerHTML = "";
-          note.appendChild(el("strong", null, "Ce s-a întâmplat în realitate: "));
-          note.appendChild(document.createTextNode(o.n));
-          refreshTabs();
-        });
-        opts.appendChild(b);
+  /* ---------- Sosire: info + întrebare/decizie ---------- */
+  function arrive(step) {
+    var cap = G.cap;
+    if (step.name !== cap.start.name || G.i < cap.steps.length - 1) addMark(cap, step.name, step.at, false);
+    G.got.push(step);
+    updatePages();
+    var sh = $("sheet"); sh.innerHTML = "";
+    sh.appendChild(prog(G.i + 1));
+    sh.appendChild(el("h2", null, step.name));
+    sh.appendChild(el("p", { "class": "date" }, step.date));
+    sh.appendChild(el("p", null, step.text));
+    sh.appendChild(el("p", { "class": "q" }, step.q));
+    var opts = el("div", { "class": "opts", role: "group", "aria-label": "Variante" });
+    var after = el("div");
+    sh.appendChild(opts); sh.appendChild(after);
+    var wrong = 0, answered = false;
+    if (step.kind === "ask") G.askTotal++;
+    step.opts.forEach(function (o) {
+      var b = el("button", { type: "button" }, o.t);
+      b.addEventListener("click", function () {
+        if (answered) return;
+        if (step.kind === "decide") {
+          answered = true; b.classList.add("picked");
+          Array.prototype.forEach.call(opts.children, function (x) { if (x !== b) x.disabled = true; });
+          reveal(after, "Ce s-a întâmplat în realitate: ", o.n);
+        } else if (o.ok) {
+          answered = true; b.classList.add("ok");
+          if (wrong === 0) G.askFirst++;
+          Array.prototype.forEach.call(opts.children, function (x) { if (x !== b) x.disabled = true; });
+          reveal(after, "Corect! ", o.n);
+        } else {
+          wrong++; b.classList.add("no"); b.disabled = true;
+          after.innerHTML = "";
+          after.appendChild(el("p", { "class": "muted" }, "Nu chiar. Încearcă din nou!"));
+        }
       });
-      c.appendChild(opts);
-      c.appendChild(note);
-      box.appendChild(c);
+      opts.appendChild(b);
     });
+  }
+  function reveal(box, lead, text) {
+    box.innerHTML = "";
+    var n = el("div", { "class": "note" });
+    n.appendChild(el("strong", null, lead));
+    n.appendChild(document.createTextNode(text));
+    box.appendChild(n);
+    var last = G.i >= G.cap.steps.length - 1;
+    var b = el("button", { type: "button", "class": "primary" }, last ? "Jurnalul de bord →" : "Mai departe →");
+    b.addEventListener("click", function () { G.i++; if (last) order(); else nav(); });
+    box.appendChild(b);
+    b.focus({ preventScroll: true });
+  }
+
+  /* ---------- Jurnalul de bord: ordonare ---------- */
+  function lab(st) { return st.name + ": " + st.page; }
+  function order() {
+    clearRing();
+    camTo({ x: 0, y: 40, w: 1000, h: 380 }, 700);
+    var steps = G.cap.steps, n = steps.length;
+    var s = (n % 2 === 0) ? 3 : 2;
+    var pool = [];
+    for (var i = 0; i < n; i++) pool.push(steps[(i * s + 1) % n]);
+    var placed = [], hint = false;
+    var sh = $("sheet");
+    function draw(checked) {
+      sh.innerHTML = "";
+      sh.appendChild(el("h2", null, "📜 Jurnalul de bord"));
+      sh.appendChild(el("p", null, "Paginile s-au amestecat. Atinge-le în ordinea în care au avut loc evenimentele."));
+      var ul = el("ol", { "class": "slots" });
+      for (var i = 0; i < n; i++) {
+        var li = el("li");
+        li.appendChild(el("span", { "class": "n" }, String(i + 1)));
+        var st = placed[i];
+        if (st) {
+          li.classList.add("filled");
+          if (checked) li.classList.add(st.ord === i + 1 ? "ok" : "no");
+          var b = el("button", { type: "button", "aria-label": "Scoate: " + lab(st) }, lab(st) + (hint ? " (" + st.date + ")" : "") + (checked ? (st.ord === i + 1 ? "  ✓" : "  ✗") : ""));
+          (function (s2) { b.addEventListener("click", function () { placed = placed.filter(function (x) { return x !== s2; }); draw(false); }); })(st);
+          li.appendChild(b);
+        } else li.appendChild(el("span", { "class": "muted" }, "…"));
+        ul.appendChild(li);
+      }
+      sh.appendChild(ul);
+      var pl = el("div", { "class": "pool" });
+      pool.forEach(function (st) {
+        if (placed.indexOf(st) !== -1) return;
+        var b = el("button", { type: "button" }, lab(st) + (hint ? " (" + st.date + ")" : ""));
+        b.addEventListener("click", function () { placed.push(st); draw(false); });
+        pl.appendChild(b);
+      });
+      sh.appendChild(pl);
+      var row = el("div", { "class": "row" });
+      var chk = el("button", { type: "button", "class": "primary" }, "Verifică");
+      chk.disabled = placed.length < n;
+      chk.addEventListener("click", function () {
+        G.orderTries++;
+        var ok = placed.every(function (st, i) { return st.ord === i + 1; });
+        if (ok) finish(); else { draw(true); sh.appendChild(el("p", { "class": "muted" }, "Unele pagini nu sunt la locul lor. Scoate paginile marcate cu ✗ și încearcă din nou.")); }
+      });
+      var hb = el("button", { type: "button" }, hint ? "Ascunde datele" : "💡 Arată datele");
+      hb.addEventListener("click", function () { hint = !hint; draw(false); });
+      row.appendChild(chk); row.appendChild(hb); sh.appendChild(row);
+    }
+    draw(false);
+    sh.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest" });
   }
 
   /* ---------- Final ---------- */
-  function renderSummary() {
-    var s = $("summary");
-    s.innerHTML = "";
-    function tile(v, l) { var d = el("div"); d.appendChild(el("b", null, v)); d.appendChild(document.createTextNode(l)); s.appendChild(d); }
-    tile(visitedCount() + "/" + totalStops(), "opriri explorate pe hartă");
-    tile(state.timeBest + "/" + EVENTS.length, "evenimente la locul lor (axa timpului)");
-    tile(state.jBest + "/" + jSelects.length, "spații corecte în jurnal");
-    tile(Object.keys(state.chosen).length + "/" + DILEMMAS.length, "decizii luate ca și căpitan");
+  function finish() {
+    var cap = G.cap;
+    var stars = 1 + (G.askTotal && G.askFirst / G.askTotal >= 0.75 ? 1 : 0) + (G.orderTries === 1 ? 1 : 0);
+    done[cap.id] = Math.max(done[cap.id] || 0, stars);
+    var sh = $("sheet"); sh.innerHTML = "";
+    sh.appendChild(el("p", { "class": "big", "aria-label": stars + " stele din 3" }, "★".repeat(stars) + "☆".repeat(3 - stars)));
+    sh.appendChild(el("h2", { style: "text-align:center" }, "Expediție încheiată!"));
+    sh.appendChild(el("p", { "class": "muted", style: "text-align:center" }, "Răspunsuri corecte din prima: " + G.askFirst + " din " + G.askTotal + " · Ordonare: " + (G.orderTries === 1 ? "din prima încercare" : G.orderTries + " încercări")));
+    var ol = el("ol", { "class": "log" });
+    cap.steps.slice().sort(function (a, b) { return a.ord - b.ord; }).forEach(function (s) {
+      var li = el("li"); li.appendChild(el("strong", null, s.date + " – ")); li.appendChild(document.createTextNode(lab(s))); ol.appendChild(li);
+    });
+    sh.appendChild(ol);
+    var row = el("div", { "class": "row" });
+    var other = el("button", { type: "button", "class": "primary" }, "Alt căpitan");
+    other.addEventListener("click", showChoose);
+    var again = el("button", { type: "button" }, "Joacă din nou");
+    again.addEventListener("click", function () { startGame(cap); });
+    row.appendChild(other); row.appendChild(again); sh.appendChild(row);
   }
 
   /* ---------- Pornire ---------- */
-  function init() {
-    $("rhyme").innerHTML = "";
-    window.RHYME.forEach(function (l) { $("rhyme").appendChild(el("span", null, l)); });
-    buildMap();
-    buildRouteButtons();
-    buildJournal();
-    buildDilemmas();
-    initTime();
-    $("showYears").addEventListener("click", function () {
-      tl.years = !tl.years;
-      this.setAttribute("aria-pressed", String(tl.years));
-      this.textContent = tl.years ? "Ascunde anii" : "Arată anii";
-      renderTime();
-    });
-    $("checkTime").addEventListener("click", checkTime);
-    $("resetTime").addEventListener("click", initTime);
-    $("checkJ").addEventListener("click", checkJournal);
-    $("showJ").addEventListener("click", showJournal);
-    $("resetJ").addEventListener("click", resetJournal);
-    $("replay").addEventListener("click", animateRoutes);
-    $("mapProgress").textContent = "Opriri explorate: 0 din " + totalStops();
-    renderTabs("p-map");
-    selectRoute("toate");
-  }
-  init();
+  $("back").addEventListener("click", showChoose);
+  var rt;
+  window.addEventListener("resize", function () {
+    clearTimeout(rt);
+    rt = setTimeout(function () { if (G && !$("game").hidden) applyView(); }, 150);
+  });
+  showChoose();
 })();
