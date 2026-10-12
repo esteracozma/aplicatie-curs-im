@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pe urmele marilor navigatori</title>
+<meta name="description" content="Resursă educațională deschisă pentru Istorie, clasa a VI-a: marile descoperiri geografice (Columb, Vasco da Gama, Magellan).">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="site">
+    <h1>Pe urmele marilor navigatori</h1>
+    <p>Patru mini-sarcini despre marile descoperiri geografice: Columb, Vasco da Gama, Magellan și Elcano. Alegi tu ordinea. Nu se introduc date personale.</p>
+  </header>
+
+  <nav class="tabs" aria-label="Sarcini" id="tabs"></nav>
+
+  <main>
+    <!-- 1. Harta -->
+    <section class="panel active" id="p-map" aria-labelledby="h-map">
+      <h2 id="h-map">1. Harta rutelor</h2>
+      <p>Alege o expediție, urmărește traseul și apasă pe opriri (sau pe butoanele de sub hartă) ca să citești ce s-a întâmplat acolo. Rutele sunt desenate schematic.</p>
+      <div class="row" id="routeBtns" role="group" aria-label="Alege expediția"></div>
+      <div class="mapbox"><svg id="map" viewBox="0 40 1000 380" role="img" aria-label="Hartă a lumii cu rutele celor trei expediții"></svg></div>
+      <div class="legend" id="legend"></div>
+      <div class="chips" id="stopChips" aria-label="Opririle expediției"></div>
+      <div class="row"><span class="badge" id="mapProgress"></span><button id="replay" type="button">Rulează din nou traseul</button></div>
+      <div class="card info" id="info" aria-live="polite"><p class="muted">Apasă pe o oprire ca să afli mai multe.</p></div>
+      <div class="card">
+        <h3>Strofă de ritmat (creație originală)</h3>
+        <p class="rhyme" id="rhyme"></p>
+        <p class="muted" style="margin-top:.6em">Scandați-o împreună, bătând ritmul din palme sau cu creionul pe bancă.</p>
+      </div>
+    </section>
+
+    <!-- 2. Axa timpului -->
+    <section class="panel" id="p-time" aria-labelledby="h-time">
+      <h2 id="h-time">2. Axa timpului</h2>
+      <p>Apasă evenimentele în ordinea în care au avut loc, de la cel mai vechi la cel mai recent. Dacă ai nevoie de sprijin, afișează anii.</p>
+      <div class="row"><button id="showYears" type="button" aria-pressed="false">Arată anii</button></div>
+      <ol class="slots" id="slots"></ol>
+      <div class="pool" id="pool"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="checkTime" type="button">Verifică</button>
+        <button id="resetTime" type="button">O iau de la capăt</button>
+      </div>
+      <div class="card" id="timeMsg" aria-live="polite" hidden></div>
+    </section>
+
+    <!-- 3. Jurnalul de bord -->
+    <section class="panel" id="p-journal" aria-labelledby="h-journal">
+      <h2 id="h-journal">3. Jurnalul de bord</h2>
+      <p>Completează jurnalul unui căpitan din secolul al XV-lea sau al XVI-lea. Alege din fiecare listă cuvântul potrivit. Atenție: unele cuvinte sunt în plus.</p>
+      <div class="card journal" id="journal"></div>
+      <div class="row">
+        <button class="primary" id="checkJ" type="button">Verifică</button>
+        <button id="showJ" type="button" hidden>Arată răspunsurile corecte</button>
+        <button id="resetJ" type="button">O iau de la capăt</button>
+      </div>
+      <div class="card" id="jMsg" aria-live="polite" hidden></div>
+    </section>
+
+    <!-- 4. Sunt căpitanul -->
+    <section class="panel" id="p-captain" aria-labelledby="h-captain">
+      <h2 id="h-captain">4. Sunt căpitanul</h2>
+      <p>În călătoriile de explorare, fiecare decizie avea riscuri. Nu există răspuns „greșit”: alege și vezi ce s-a întâmplat în realitate.</p>
+      <div id="dilemmas"></div>
+    </section>
+
+    <!-- Final -->
+    <section class="panel" id="p-final" aria-labelledby="h-final">
+      <h2 id="h-final">Biletul de ieșire</h2>
+      <div class="summary" id="summary"></div>
+      <div class="card">
+        <h3>Pot să… (bifează)</h3>
+        <label class="check"><input type="checkbox"> <span>Spun ce legătură există între cele trei expediții.</span></label>
+        <label class="check"><input type="checkbox"> <span>Localizez pe hartă drumurile lui Columb, Vasco da Gama și Magellan–Elcano.</span></label>
+        <label class="check"><input type="checkbox"> <span>Așez în ordine cronologică evenimentele principale.</span></label>
+        <label class="check"><input type="checkbox"> <span>Explic de ce au pornit europenii pe mare: mirodeniile și calea spre Asia.</span></label>
+      </div>
+      <div class="card">
+        <label for="t1"><h3>Astăzi am învățat că…</h3></label>
+        <textarea id="t1"></textarea>
+        <label for="t2"><h3 style="margin-top:.8em">Data viitoare vreau să…</h3></label>
+        <textarea id="t2"></textarea>
+        <p class="muted noprint">Ce scrii aici rămâne doar pe ecranul tău și nu se trimite nicăieri. Poți tipări pagina sau o poți arăta profesorului.</p>
+        <button class="noprint" type="button" onclick="window.print()">Tipărește biletul</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <p><strong>Resursă educațională deschisă.</strong> Textele și aplicația sunt licențiate <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ro">CC BY-SA 4.0</a>. Harta provine din setul Natural Earth (domeniu public), prin pachetul <em>world-atlas</em>. Aplicația nu colectează date și nu folosește cookie-uri.</p>
+    <p>Surse pentru datele istorice:</p>
+    <ul>
+      <li><a href="https://sourcebooks.web.fordham.edu/mod/1497degama.asp">Fordham Internet History Sourcebooks – Vasco da Gama, 1497–1498</a></li>
+      <li><a href="https://www.history.com/this-day-in-history/September-6/magellans-expedition-circumnavigates-globe">HISTORY – Magellan’s expedition circumnavigates globe</a></li>
+      <li><a href="https://en.wikipedia.org/wiki/Magellan_expedition">Wikipedia – Magellan expedition</a></li>
+      <li><a href="https://vanderkrogt.net/columbus/texts/some_background_information_on_Columbus.html">Columbus Monuments Pages – Some background information on Columbus</a></li>
+    </ul>
+  </footer>
+</div>
+<div class="live" id="live" aria-live="polite"></div>
+<script src="land.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
